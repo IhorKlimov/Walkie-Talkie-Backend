@@ -1,67 +1,46 @@
-import java.io.IOException;
-import javax.servlet.ServletException;
-import javax.servlet.http.*;
-import org.eclipse.jetty.server.Server;
-import org.eclipse.jetty.servlet.*;
-import java.net.URI;
-import java.net.URISyntaxException;
-import java.sql.*;
+import org.eclipse.jetty.websocket.api.Session;
+import spark.ModelAndView;
+import spark.template.freemarker.FreeMarkerEngine;
 
-public class Main extends HttpServlet {
-  @Override
-  protected void doGet(HttpServletRequest req, HttpServletResponse resp)
-      throws ServletException, IOException {
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
-    if (req.getRequestURI().endsWith("/db")) {
-      showDatabase(req,resp);
-    } else {
-      showHome(req,resp);
-    }
+import static spark.Spark.*;
+
+
+
+public class Main {
+  static Map<Session, String> userUsernameMap = new ConcurrentHashMap<>();
+  static int nextUserNumber = 1; //Assign to username for next connecting user
+
+  public static void main(String[] args) {
+
+    port(Integer.valueOf(System.getenv("PORT")));
+    staticFileLocation("/public");
+
+    webSocket("/chat", ChatWebSocketHandler.class);
+    init();
+
+    get("/hello", (req, res) -> Integer.valueOf(System.getenv("PORT")));
+
+    get("/", (request, response) -> {
+            Map<String, Object> attributes = new HashMap<>();
+            attributes.put("message", "Hello World!");
+
+            return new ModelAndView(attributes, "index.ftl");
+        }, new FreeMarkerEngine());
   }
 
-  private void showHome(HttpServletRequest req, HttpServletResponse resp)
-      throws ServletException, IOException {
-    resp.getWriter().print("Hello from Java!");
-  }
-
-  private void showDatabase(HttpServletRequest req, HttpServletResponse resp)
-      throws ServletException, IOException {
-    try {
-      Connection connection = getConnection();
-
-      Statement stmt = connection.createStatement();
-      stmt.executeUpdate("CREATE TABLE IF NOT EXISTS ticks (tick timestamp)");
-      stmt.executeUpdate("INSERT INTO ticks VALUES (now())");
-      ResultSet rs = stmt.executeQuery("SELECT tick FROM ticks");
-
-      String out = "Hello!\n";
-      while (rs.next()) {
-          out += "Read from DB: " + rs.getTimestamp("tick") + "\n";
+  public static void broadcastMessage(Session sender, String message) {
+    userUsernameMap.keySet().stream().filter(Session::isOpen).forEach(session -> {
+      if (session != sender) {
+        try {
+          session.getRemote().sendString(message);
+        } catch (Exception e) {
+          e.printStackTrace();
+        }
       }
-
-      resp.getWriter().print(out);
-    } catch (Exception e) {
-      resp.getWriter().print("There was an error: " + e.getMessage());
-    }
-  }
-
-  private Connection getConnection() throws URISyntaxException, SQLException {
-    URI dbUri = new URI(System.getenv("DATABASE_URL"));
-
-    String username = dbUri.getUserInfo().split(":")[0];
-    String password = dbUri.getUserInfo().split(":")[1];
-    String dbUrl = "jdbc:postgresql://" + dbUri.getHost() + dbUri.getPath();
-
-    return DriverManager.getConnection(dbUrl, username, password);
-  }
-
-  public static void main(String[] args) throws Exception{
-    Server server = new Server(Integer.valueOf(System.getenv("PORT")));
-    ServletContextHandler context = new ServletContextHandler(ServletContextHandler.SESSIONS);
-    context.setContextPath("/");
-    server.setHandler(context);
-    context.addServlet(new ServletHolder(new Main()),"/*");
-    server.start();
-    server.join();
+    });
   }
 }
